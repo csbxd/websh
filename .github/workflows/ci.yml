@@ -27,7 +27,7 @@ jobs:
         run: go test -race ./...
       - name: Vet
         run: go vet ./...
-      - name: Build
-        run: go build ./...
+      - name: Build standalone CLI
+        run: go build -o "$RUNNER_TEMP/websh" ./cmd/websh
       - name: Check browser JavaScript
         run: node --check web/app.js

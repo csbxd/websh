@@ -6,25 +6,30 @@
     <meta name="color-scheme" content="dark">
     <title>WebSH · 浏览器 Shell</title>
     <link rel="stylesheet" href="/style.css">
-    <script src="/app.js" defer></script>
+    <script data-cfasync="false" src="/app.js" defer></script>
   </head>
   <body>
-    <main id="websh" data-authenticated="false" data-session-state="none" data-connected="false">
+    <main id="websh" data-authenticated="false" data-session-state="none" data-connected="false" data-external-auth="{{.ExternalAuth}}" data-login-url="{{.LoginURL}}">
       <header class="site-header">
         <div class="brand"><span class="brand-mark" aria-hidden="true">&gt;_</span><div><h1>WebSH</h1><p>可读取、可操作的浏览器 Shell</p></div></div>
-        <div class="server-meta"><span id="connection-status" role="status">正在连接…</span><span id="server-info">Go · Shell</span></div>
+        <div class="server-meta"><span id="connection-status" role="status">正在连接…</span><span id="server-info">Go · Shell</span>{{if and .ExternalAuth .LogoutURL}}<a id="external-logout" href="{{.LogoutURL}}">退出登录</a>{{end}}</div>
       </header>
 
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 
       <section id="login-panel" class="panel login-panel" aria-labelledby="login-title" hidden>
         <p class="eyebrow">连接终端</p><h2 id="login-title">身份验证</h2>
+        {{if .ExternalAuth}}
+        <p class="muted">通过身份提供方登录后使用 Shell。</p>
+        <a id="external-login" href="{{.LoginURL}}">登录</a>
+        {{else}}
         <p class="muted">输入启动 WebSH 时配置的访问令牌。</p>
         <form id="login-form">
           <label for="auth-token">访问令牌</label>
           <input id="auth-token" name="token" type="password" autocomplete="off" spellcheck="false" required>
           <button id="login-button" type="submit">连接</button>
         </form>
+        {{end}}
       </section>
 
       <div id="workspace" hidden>

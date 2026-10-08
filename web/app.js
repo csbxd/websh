@@ -3,6 +3,8 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const root = $("websh");
+  const externalAuth = root.dataset.externalAuth === "true";
+  const loginURL = root.dataset.loginUrl || "/";
   const state = { authenticated: false, info: null, sessions: [], session: null, activeID: "", pending: false, creating: false, inputPending: false, pollTimer: null, pollInFlight: false, connected: false };
   const cards = new Map();
   const stateLabels = { idle: "空闲", running: "执行中", closed: "已关闭" };
@@ -73,9 +75,14 @@
         body = null;
       }
       if (!response.ok) {
-        if (response.status === 401 && path !== "/api/login") {
+        if (response.status === 401 && (externalAuth || path !== "/api/login")) {
           setAuthenticated(false);
-          showNotice("登录已失效，请重新输入访问令牌。", "error");
+          if (externalAuth) {
+            showNotice("登录已失效，正在重新登录。", "error");
+            location.assign(loginURL);
+          } else {
+            showNotice("登录已失效，请重新输入访问令牌。", "error");
+          }
         }
         throw new APIError(body?.error || `请求失败（HTTP ${response.status}）`, response.status);
       }
@@ -385,7 +392,7 @@
     } finally { state.creating = false; updateControls(); schedulePoll(); }
   }
 
-  $("login-form").addEventListener("submit", async (event) => {
+  $("login-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = $("login-button");
     if (button.disabled) return;
@@ -535,6 +542,7 @@
       $("version").textContent = state.info.version || "v1";
       setAuthenticated(!!state.info.authenticated);
       if (state.authenticated) { await loadSessions({ autoCreate: true }); schedulePoll(); }
+      else if (externalAuth) location.assign(loginURL);
       else $("auth-token").focus();
     } catch (error) {
       showNotice(error.message, "error");

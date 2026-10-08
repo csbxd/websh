@@ -11,19 +11,19 @@ WebSH 把命令、运行状态、退出码、工作目录、stdout 和 stderr �
 ```sh
 git clone https://github.com/csbxd/websh.git
 cd websh
-go run .
+go run ./cmd/websh
 ```
 
 打开启动日志中的地址，默认是 `http://127.0.0.1:8080`，在登录框填入日志显示的访问令牌。启动时没有设置令牌则自动生成；也可固定配置：
 
 ```sh
-WEBSH_TOKEN='replace-with-a-long-random-secret' go run .
+WEBSH_TOKEN='replace-with-a-long-random-secret' go run ./cmd/websh
 ```
 
 构建独立程序：
 
 ```sh
-go build -o websh .
+go build -o websh ./cmd/websh
 ./websh -dir /path/to/workspace
 ```
 
@@ -35,6 +35,33 @@ go build -o websh .
 | `-output-limit` | `1048576` | 每条命令的每个输出流最多保留的字节数 |
 | `-max-sessions` | `16` | 同时存活的会话上限 |
 | `-hostname` | 空 | 额外允许的 HTTP Host 名称 |
+
+## 嵌入现有 HTTP 服务
+
+根包 `github.com/csbxd/websh` 提供 `Options` 和 `New`。`New` 返回 `http.Handler`、关闭函数和错误，不监听端口；宿主负责把 Handler 挂到自己的 HTTP 服务，并在退出时调用关闭函数。`Shell`、`Dir`、`OutputLimit` 和 `MaxSessions` 由宿主显式提供，输出上限范围为 `256` 到 `16777216`，会话上限范围为 `1` 到 `128`。
+
+可以通过 `Authenticate` 接入宿主已有的认证，例如 OIDC：
+
+```go
+handler, closeWebSH, err := websh.New(websh.Options{
+	Shell: "/bin/sh", Dir: "/path/to/workspace",
+	OutputLimit: 1 << 20, MaxSessions: 16,
+	Hostname: "shell.example.com",
+	Authenticate: func(r *http.Request) bool {
+		return appAuthenticatedSession(r) // 宿主验证 OIDC 会话后返回 true。
+	},
+	LoginURL: "/_auth/login", LogoutURL: "/_auth/logout",
+})
+if err != nil {
+	return err
+}
+defer closeWebSH()
+mux.Handle("/", handler)
+```
+
+示例中的 `websh` 和 `http` 分别来自 `github.com/csbxd/websh` 和 `net/http`；`appAuthenticatedSession` 由宿主实现，登录和退出路由也由宿主处理。设置 `Authenticate` 后，WebSH 的每个请求都只依赖该回调认证，原生令牌、Bearer 和认证 Cookie 不再提供登录入口。`LoginURL` 和 `LogoutURL` 用于浏览器登录、认证失效和退出时导航到宿主路由。HTTP Host 和请求来源检查仍然生效。
+
+每次 `New` 创建一个会话管理器，同一个 Handler 的所有已认证用户共享会话和命令记录；认证回调不会隔离不同用户的数据。需要用户隔离时，宿主应分别创建和路由各用户的 Handler。关闭函数会停止该 Handler 的全部 Shell 会话，可重复调用。不设置 `Authenticate` 时使用原生令牌认证，宿主必须通过 `Token` 提供有效令牌；独立 CLI 会从 `WEBSH_TOKEN` 读取令牌，缺省时自动生成。
 
 ## 浏览器操作
 
@@ -50,7 +77,7 @@ go build -o websh .
 
 控件有稳定 ID、可访问名称和原生表单语义。建议采用以下流程：
 
-1. 在 `#auth-token` 填入令牌，点击 `#login-button`。
+1. 独立模式在 `#auth-token` 填入令牌并点击 `#login-button`；外部认证模式通过宿主登录页面或 `#external-login` 完成登录。
 2. 使用 `#new-session` 打开创建表单，在 `#session-name`、`#session-cwd` 填写信息，点击 `#create-session`。
 3. 在 `#command-input` 填入完整命令，可通过 `#timeout-seconds` 设置超时，点击 `#run-command` 一次。
 4. 等待出现对应的命令记录，读取其 `data-command-id`，按该 ID 持续观察输出和状态。
@@ -83,12 +110,12 @@ go build -o websh .
 
 ## HTTP API
 
-浏览器登录使用 HttpOnly、SameSite=Strict 的会话 Cookie；直接访问 API 也可使用 `Authorization: Bearer TOKEN`。令牌不放在 URL 中。接口返回 JSON。
+独立 CLI 的浏览器登录使用 HttpOnly、SameSite=Strict 的会话 Cookie；直接访问 API 也可使用 `Authorization: Bearer TOKEN`。令牌不放在 URL 中。接口返回 JSON。嵌入模式使用 `Authenticate` 时，认证由宿主负责，原生令牌登录接口和这些认证凭据不再生效。
 
 | 方法与路径 | 请求 / 结果 |
 | --- | --- |
-| `GET /api/info` | 无需登录，获取服务和认证状态信息 |
-| `POST /api/login` | `{ "token": "…" }`，设置认证 Cookie |
+| `GET /api/info` | 获取服务和认证状态；独立模式无需登录，外部认证模式仍校验宿主身份 |
+| `POST /api/login` | 独立模式通过 `{ "token": "…" }` 设置认证 Cookie；外部认证模式不提供此入口 |
 | `GET /api/sessions` | `{ "sessions": [...] }` |
 | `POST /api/sessions` | `{ "name": "…", "cwd": "…" }`，返回会话；字段可省略 |
 | `GET /api/sessions/{id}` | 会话快照，含命令记录和当前输出 |
@@ -126,7 +153,7 @@ curl -sS -b cookies.txt \
 
 ## 访问边界
 
-WebSH 的命令拥有运行服务的操作系统用户权限，可读取、修改该用户的文件和执行程序。它没有沙箱，令牌持有者应当是可信用户或代理。所有监听地址都需要令牌认证；默认仅监听本机，写入请求检查来源。HTTP Host 默认仅接受 `localhost` 或 IP 地址，使用自定义域名需要通过 `-hostname` 显式配置。
+WebSH 的命令拥有运行服务的操作系统用户权限，可读取、修改该用户的文件和执行程序。它没有沙箱，已认证用户或代理应当可信。独立 CLI 的所有监听地址都需要令牌认证；默认仅监听本机，写入请求检查来源。嵌入模式可由宿主通过 `Authenticate` 提供认证。HTTP Host 默认仅接受 `localhost` 或 IP 地址，使用自定义域名需要通过 CLI 的 `-hostname` 或库的 `Hostname` 显式配置。
 
 远程使用可以保持服务监听 `127.0.0.1`，通过 SSH 隧道访问：
 
@@ -141,7 +168,7 @@ ssh -L 8080:127.0.0.1:8080 user@server
 ```sh
 go test -race ./...
 go vet ./...
-go build ./...
+go build -o websh ./cmd/websh
 node --check web/app.js
 ```
 

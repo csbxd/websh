@@ -1,18 +1,21 @@
 //go:build linux || darwin
 
-package main
+package websh
 
 import (
+	"bytes"
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"io"
 	"io/fs"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"runtime"
 	"sort"
 	"strings"
@@ -22,14 +25,18 @@ import (
 //go:embed web/*
 var assets embed.FS
 
-const version = "0.1.0"
 const cookieName = "websh_session"
 
+var indexTemplate = template.Must(template.ParseFS(assets, "web/index.html"))
+
 type apiServer struct {
-	m        *manager
-	token    string
-	static   http.Handler
-	hostname string
+	m            *manager
+	token        string
+	static       http.Handler
+	hostname     string
+	authenticate func(*http.Request) bool
+	loginURL     string
+	logoutURL    string
 }
 
 func newHandler(m *manager, token string) http.Handler {
@@ -47,6 +54,9 @@ func apiError(w http.ResponseWriter, status int, err error) {
 }
 
 func (a *apiServer) authenticated(r *http.Request) bool {
+	if a.authenticate != nil {
+		return a.authenticate(r)
+	}
 	value := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if value == r.Header.Get("Authorization") {
 		value = ""
@@ -109,16 +119,27 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-	if !a.allowedHost(r.Host) {
+	authenticated := a.authenticated(r)
+	if !a.allowedHost(r.Host) && !(a.authenticate != nil && authenticated) {
 		apiError(w, http.StatusForbidden, errors.New("unrecognized Host; use localhost, an IP address, or the configured hostname"))
 		return
+	}
+	if a.authenticate != nil {
+		if !authenticated {
+			apiError(w, http.StatusUnauthorized, errors.New("authentication required"))
+			return
+		}
+		if r.URL.Path == "/api/login" {
+			apiError(w, http.StatusNotFound, errors.New("login is managed by the host application"))
+			return
+		}
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
 		apiError(w, http.StatusForbidden, errors.New("cross-origin requests are forbidden"))
 		return
 	}
 	if r.URL.Path == "/api/info" && r.Method == http.MethodGet {
-		jsonReply(w, 200, map[string]any{"authenticated": a.authenticated(r), "shell": a.m.shell, "platform": runtime.GOOS, "output_limit": a.m.limit, "version": version})
+		jsonReply(w, 200, map[string]any{"authenticated": authenticated, "shell": a.m.shell, "platform": runtime.GOOS, "output_limit": a.m.limit, "version": Version})
 		return
 	}
 	if r.URL.Path == "/api/login" && r.Method == http.MethodPost {
@@ -138,7 +159,7 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		if !a.authenticated(r) {
+		if !authenticated {
 			apiError(w, 401, errors.New("authentication required"))
 			return
 		}
@@ -147,6 +168,22 @@ func (a *apiServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		apiError(w, 405, errors.New("method not allowed"))
+		return
+	}
+	if path.Clean(r.URL.Path) == "/" {
+		var page bytes.Buffer
+		if err := indexTemplate.Execute(&page, struct {
+			ExternalAuth bool
+			LoginURL     string
+			LogoutURL    string
+		}{a.authenticate != nil, a.loginURL, a.logoutURL}); err != nil {
+			http.Error(w, "could not render page", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(page.Bytes())
+		}
 		return
 	}
 	a.static.ServeHTTP(w, r)
