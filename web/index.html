@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>WebSH · 浏览器 Shell</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main id="websh" data-authenticated="false" data-session-state="none" data-connected="false">
+      <header class="site-header">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">&gt;_</span><div><h1>WebSH</h1><p>可读取、可操作的浏览器 Shell</p></div></div>
+        <div class="server-meta"><span id="connection-status" role="status">正在连接…</span><span id="server-info">Go · Shell</span></div>
+      </header>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <section id="login-panel" class="panel login-panel" aria-labelledby="login-title" hidden>
+        <p class="eyebrow">连接终端</p><h2 id="login-title">身份验证</h2>
+        <p class="muted">输入启动 WebSH 时配置的访问令牌。</p>
+        <form id="login-form">
+          <label for="auth-token">访问令牌</label>
+          <input id="auth-token" name="token" type="password" autocomplete="off" spellcheck="false" required>
+          <button id="login-button" type="submit">连接</button>
+        </form>
+      </section>
+
+      <div id="workspace" hidden>
+        <section class="panel session-panel" aria-labelledby="session-title">
+          <div class="section-heading"><h2 id="session-title">Shell 会话</h2><span class="pill" id="session-status">未选择会话</span></div>
+          <div class="session-controls">
+            <div class="session-picker"><label for="session-select">当前会话</label><select id="session-select" aria-label="选择 Shell 会话"><option value="">尚无会话</option></select></div>
+            <button id="new-session" type="button" class="secondary">新建会话</button>
+            <button id="refresh-session" type="button" class="secondary">刷新状态</button>
+            <button id="close-session" type="button" class="danger secondary" disabled>关闭会话</button>
+          </div>
+          <dl class="session-facts"><div><dt>会话 ID</dt><dd id="session-id">—</dd></div><div class="cwd-fact"><dt>当前目录</dt><dd id="current-cwd">—</dd></div><div><dt>执行中命令</dt><dd id="active-command-id">—</dd></div></dl>
+          <form id="new-session-form" class="new-session-form" hidden>
+            <div><label for="session-name">会话名称（可选）</label><input id="session-name" name="name" placeholder="例如：构建" autocomplete="off"></div>
+            <div><label for="session-cwd">工作目录（可选）</label><input id="session-cwd" name="cwd" placeholder="使用服务器默认目录" autocomplete="off" spellcheck="false"></div>
+            <div class="form-actions"><button id="create-session" type="submit">创建会话</button><button id="cancel-new-session" type="button" class="secondary">取消</button></div>
+          </form>
+        </section>
+
+        <section class="panel command-panel" aria-labelledby="command-title">
+          <div class="section-heading"><h2 id="command-title">执行命令</h2><span class="muted small">每个会话按顺序执行</span></div>
+          <form id="command-form">
+            <label for="command-input">Shell 命令</label>
+            <textarea id="command-input" name="command" rows="3" placeholder="pwd&#10;printf 'Hello, WebSH\n'" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="command-help" required></textarea>
+            <div class="command-actions"><div class="timeout-field"><label for="timeout-seconds">超时（秒，0 表示不限）</label><input id="timeout-seconds" name="timeout_seconds" type="number" min="0" max="86400" value="0"></div><div class="button-group"><button id="interrupt-command" type="button" class="danger secondary" disabled>中断命令</button><button id="run-command" type="submit" disabled>执行命令</button></div></div>
+            <p id="command-help" class="muted small">支持多行命令。Ctrl / ⌘ + Enter 执行。目录与环境保留在当前会话中。</p>
+          </form>
+          <div id="submission-uncertain" class="notice warning" hidden><p>上次提交的响应未收到。为避免重复执行，已锁定命令提交；请刷新状态检查命令记录。</p><button id="resolve-submission" type="button" class="secondary" disabled>确认未执行，解除锁定</button></div>
+        </section>
+
+        <section id="stdin-panel" class="panel stdin-panel" aria-labelledby="stdin-title" hidden>
+          <div class="section-heading"><h2 id="stdin-title">发送标准输入</h2><span class="muted small">用于 read、cat 等等待输入的命令</span></div>
+          <form id="stdin-form"><label for="stdin-input">输入内容</label><textarea id="stdin-input" name="stdin" rows="2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入文本；发送时自动追加换行"></textarea><div class="stdin-actions"><label class="checkbox-label"><input id="stdin-newline" type="checkbox" checked>追加换行</label><div class="button-group"><button id="send-eof" type="button" class="secondary">发送 EOF</button><button id="send-input" type="submit">发送输入</button></div></div></form>
+        </section>
+
+        <section class="history-section" aria-labelledby="history-title">
+          <div class="section-heading"><h2 id="history-title">命令记录</h2><span class="muted small" id="command-count">0 条命令</span></div>
+          <p id="empty-history" class="empty-state">命令的状态、输出和退出码会显示在这里。</p>
+          <div id="command-history" aria-label="命令执行记录"></div>
+        </section>
+
+        <details class="panel contract-panel" id="ai-contract"><summary>AI 操作契约与使用说明</summary><div class="details-content"><p>所有操作和输出均为普通 DOM，可通过元素 ID、标签和文本读取，无需识别终端图像。</p><ol><li>在 <code>#command-input</code> 填入命令，点击 <code>#run-command</code>。每次只提交一次。</li><li>读取 <code>#session-status</code> 和命令卡片的 <code>data-status</code>。执行中为 <code>running</code>，结束后读取退出码和输出。</li><li>输出在命令卡片的 <code>data-stream="stdout"</code> / <code>data-stream="stderr"</code> 文本节点内；退出码在 <code>data-field="exit-code"</code>。界面清理 ANSI，回车换行，其余控制字符转义。若 <code>data-output-normalized="true"</code>，精确原文保留在该卡片的 <code>data-field="raw-output"</code> JSON 中。</li><li>等待输入时使用 <code>#stdin-input</code> 与 <code>#send-input</code>。结束输入点击 <code>#send-eof</code>，停止命令点击 <code>#interrupt-command</code>。</li><li><code>cd</code>、变量和函数在当前会话中保留。需要独立环境时新建会话。命令没有伪终端；全屏交互程序应改用非交互选项。</li></ol><p class="muted small">运行时状态位于 <code>#websh</code> 的 data 属性、每张命令卡片以及下方 JSON。输出以文本显示；运行中自动更新。</p></div></details>
+        <details class="panel state-panel" id="state-details"><summary>当前状态 JSON</summary><pre id="session-state" aria-label="当前会话的机器可读状态">{"authenticated":false,"session":null}</pre></details>
+      </div>
+      <footer>WebSH <span id="version">v1</span> <span aria-hidden="true">·</span> 浏览器中的持久 Shell 会话</footer>
+    </main>
+  </body>
+</html>

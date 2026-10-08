@@ -1,0 +1,6 @@
+/websh
+/websh-*
+*.log
+.env
+.DS_Store
+cookies.txt
